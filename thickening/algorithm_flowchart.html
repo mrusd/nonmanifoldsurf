@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Midsurface Thickening Algorithm</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --panel: #ffffff; --ink: #1d2733; --muted: #5b6776; --line: #d8dde4;
+    --free: #8a94a3; --through: #2f7d6d; --miter: #2a62b8; --branch: #b0581f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #12161c; --panel: #1a2029; --ink: #e6ebf1; --muted: #9aa6b4; --line: #2c3541; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+           padding: 18px; margin-bottom: 18px; overflow-x: auto; }
+  .mermaid { display: flex; justify-content: center; }
+  h2 { font-size: 1.05rem; margin: 0 0 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; color: #fff; font-weight: 600; font-size: 13px; }
+  .free { background: var(--free); } .through { background: var(--through); }
+  .miter { background: var(--miter); } .branch { background: var(--branch); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+  ul { margin: 0; padding-left: 18px; }
+  li { margin: 3px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Midsurface thickening: slab-and-union</h1>
+  <p class="sub">How <code>thicken_midsurface.py</code> turns a (non-manifold) planar midsurface into a solid,
+     offsetting each face by &plusmn;t along its normal (total thickness 2t).</p>
+
+  <div class="panel">
+    <pre class="mermaid">
+flowchart TD
+    A(["Input STEP midsurface<br/>+ offset t per side"]) --> B["Parse STEP<br/>faces, loops, vertices"]
+    B --> C["Prepare each face<br/>merge collinear points · unit normal n<br/>local frame u,v · loop CCW about n"]
+    C --> D{{"For every edge E of every face A"}}
+
+    subgraph JUNC ["1 · Junction detection (geometric, ignores STEP topology)"]
+      D --> E["Compare E with every other face B"]
+      E --> F{"E lies in<br/>B's plane?"}
+      F -- no --> E
+      F -- yes --> G{"E overlaps one of<br/>B's boundary edges?"}
+      G -- yes --> H["Record branch direction b<br/>(B's inward in-plane direction)"]
+      G -- no --> I{"Midpoint of E strictly<br/>inside B?"}
+      I -- yes --> J["Mark: lands on B's interior"]
+      I -- no --> E
+    end
+
+    H --> K
+    J --> K
+    subgraph CLS ["2 · Classify edge E of face A  (a = A's inward direction)"]
+      K{"Lands on a<br/>face interior?"}
+      K -- yes --> BR1["BRANCH<br/>extend by t"]
+      K -- no --> L{"Some b = −a?<br/>(A continues coplanar)"}
+      L -- yes --> TH["THROUGH<br/>extend by ε (tiny overlap)"]
+      L -- no --> M{"Number of distinct<br/>branch directions"}
+      M -- "1" --> MI["MITER<br/>φ = angle(a, b)<br/>extend t/tan(φ/2) + t<br/>clip plane ⟂ bisector of a, b"]
+      M -- "≥ 2" --> BR2["BRANCH<br/>extend by t (T / Y junction)"]
+      M -- "0" --> FR["FREE<br/>no extension, flat cap"]
+    end
+
+    BR1 --> N
+    TH --> N
+    MI --> N
+    BR2 --> N
+    FR --> N
+
+    subgraph SLAB ["3 · Build one slab per face"]
+      N["Extended polygon:<br/>offset each edge line outward by its extension,<br/>intersect consecutive lines"]
+      N --> O["Sweep polygon from −t to +t along n<br/>(prism)"]
+      O --> P["Trim by each miter half-space<br/>keep m·(x − p₀) ≥ 0"]
+    end
+
+    P --> Q{"Backend"}
+    subgraph UNION ["4 · Union and clean-up"]
+      Q -- "OpenCASCADE (exact B-rep)" --> R["Multi-argument Boolean fuse<br/>(fuzzy tolerance)"]
+      R --> S["Unify same-domain faces<br/>(merge coplanar faces)"]
+      Q -- "manifold3d (mesh)" --> T["Batch mesh union"]
+    end
+
+    S --> U["Validate<br/>BRepCheck · solid count · volume"]
+    T --> U
+    U --> V(["Outputs<br/>_thick.step · _thick.stl · _thick.html"])
+
+    classDef free fill:#8a94a3,stroke:#6c7684,color:#fff
+    classDef through fill:#2f7d6d,stroke:#225c50,color:#fff
+    classDef miter fill:#2a62b8,stroke:#1f4a8c,color:#fff
+    classDef branch fill:#b0581f,stroke:#874216,color:#fff
+    classDef io fill:#1d2733,stroke:#1d2733,color:#fff
+    class FR free
+    class TH through
+    class MI miter
+    class BR1,BR2 branch
+    class A,V io
+    </pre>
+  </div>
+
+  <div class="panel">
+    <h2>Edge kinds on the rib-box model (t = 20 mm)</h2>
+    <table>
+      <tr><th>Kind</th><th>Rule</th><th>Where it occurs here</th></tr>
+      <tr><td><span class="tag free">FREE</span></td><td>No other face touches the edge; slab ends flush.</td>
+          <td>Wall tops (z = 300), rib top and rib free end (y = 300)</td></tr>
+      <tr><td><span class="tag through">THROUGH</span></td><td>Face continues in the same plane; only a tiny overlap ε for a clean fuse.</td>
+          <td>The two front-wall halves at x = 500</td></tr>
+      <tr><td><span class="tag miter">MITER</span></td><td>One neighbour at angle φ: extend, then cut on the bisector. Both neighbours use the same plane, so they meet exactly.</td>
+          <td>Floor–wall edges and wall–wall corners (φ = 90°, extension 40 mm before trimming)</td></tr>
+      <tr><td><span class="tag branch">BRANCH</span></td><td>Edge lands on a face's interior, or meets 2+ non-coplanar branches; extend by t to penetrate.</td>
+          <td>Rib bottom into the floor, rib side into the front wall (both extended 20 mm)</td></tr>
+    </table>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Why geometric junction detection</h2>
+      <ul>
+        <li>The STEP export duplicated the rib–wall edge and never imprinted the rib onto the floor.</li>
+        <li>Testing "edge lies in plane + overlaps boundary / crosses interior" finds both joins anyway.</li>
+        <li>Tolerance defaults to 1e-5 × model size (0.01 mm here), matching the STEP's accuracy.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h2>Checks on the result</h2>
+      <ul>
+        <li>One valid solid, 15 faces after unification.</li>
+        <li>Volume 91,200,000 mm³ = 1040²·320 − 960²·280 + 40·280·280.</li>
+        <li>Bounding box (−20, −20, −20) to (1020, 1020, 300).</li>
+      </ul>
+    </div>
+  </div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  mermaid.initialize({ startOnLoad: true, theme: dark ? 'dark' : 'default',
+                       flowchart: { curve: 'basis', htmlLabels: true }, securityLevel: 'loose' });
+</script>
+</body>
+</html>
